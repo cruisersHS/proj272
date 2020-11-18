@@ -10,6 +10,23 @@
 // modport TO(input clk, input reset,output noc_to_dev_ctl,output noc_to_dev_data);
 
 
+// module noc_intf(
+	// input clk,
+	// input rst,
+	// input noc_to_dev_ctl,
+	// input [7:0] noc_to_dev_data,
+	// output reg noc_from_dev_ctl,
+	// output reg [7:0] noc_from_dev_data,
+	// output reg pushin,
+	// output reg firstin,
+	// input stopin,
+	// output reg [63:0] din,
+	// input pushout,
+	// input firstout,
+	// output reg stopout,
+	// input [63:0] dout
+// );
+
 //`include "tb_intf.sv"
 `include "perm.sv"
 `include "nochw2.sv"
@@ -18,8 +35,25 @@ module PS(NOCI.TI t, NOCI.FO f);
 	//assign f.clk = t.clk;
 	//assign f.reset = t.reset;
 	//??????????????????????????????????????????????????????
-	assign f.noc_from_dev_ctl = t.noc_from_dev_ctl;
-	assign f.noc_from_dev_data = t.noc_from_dev_data;
+	//assign f.noc_from_dev_ctl = t.noc_from_dev_ctl;
+	//assign f.noc_from_dev_data = t.noc_from_dev_data;
+	
+	wire pushin, firstin, stopin, pushout, firstout, stopout;
+	wire [63:0] din, dout;
+	
+	NOCI intf1(t.clk, t.reset);
+	//NOCI intf2(.*);
+	//NOCI intf3(.*);
+	//NOCI intf4(.*);
+	
+	noc_intf n1(
+		.clk(NOCI.clk),
+		.rst(NOCI.reset),
+		.noc_to_dev_ctl(intf1.TO.noc_to_dev_ctl),
+		.noc_to_dev_data(intf1.TO.noc_to_dev_data),
+		.noc_from_dev_ctl(intf1.FI.noc_from_dev_ctl),
+		.noc_from_dev_data(intf1.FI.noc_from_dev_data),
+	);
 	
 	enum [3:0] {
 		IDLE,
