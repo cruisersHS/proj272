@@ -32,11 +32,11 @@
 `include "nochw2.sv"
 
 module PS(NOCI.TI t, NOCI.FO f);
-	//assign f.clk = t.clk;
-	//assign f.reset = t.reset;
+	assign f.clk = t.clk;
+	assign f.reset = t.reset;
 	//??????????????????????????????????????????????????????
-	//assign f.noc_from_dev_ctl = t.noc_from_dev_ctl;
-	//assign f.noc_from_dev_data = t.noc_from_dev_data;
+	assign f.noc_from_dev_ctl = t.noc_from_dev_ctl;
+	assign f.noc_from_dev_data = t.noc_from_dev_data;
 	
 	wire pushin, firstin, stopin, pushout, firstout, stopout;
 	wire [63:0] din, dout;
@@ -52,7 +52,7 @@ module PS(NOCI.TI t, NOCI.FO f);
 		.noc_to_dev_ctl(intf1.TO.noc_to_dev_ctl),
 		.noc_to_dev_data(intf1.TO.noc_to_dev_data),
 		.noc_from_dev_ctl(intf1.FI.noc_from_dev_ctl),
-		.noc_from_dev_data(intf1.FI.noc_from_dev_data),
+		.noc_from_dev_data(intf1.FI.noc_from_dev_data)
 	);
 	
 	enum [3:0] {
