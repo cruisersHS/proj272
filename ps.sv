@@ -1,8 +1,8 @@
 //`include "m55.sv"
 //`include "perm.sv"
 //`include "nochw2.sv"
-`include "perm.sv"  //perm_pkg.sv
-`include "fifo.sv"  //n2p_fifo.sv
+`include "perm_pkg.sv"  //perm_pkg.sv
+`include "n2p_fifo.sv"  //n2p_fifo.sv
 
 module ps (NOCI.TI t, NOCI.FO f);
 	// Signal from and to TB
