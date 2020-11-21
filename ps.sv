@@ -1,8 +1,8 @@
 //`include "m55.sv"
 //`include "perm.sv"
 //`include "nochw2.sv"
-`include "perm_pkg.sv"  //perm_pkg.sv
-`include "n2p_fifo.sv"  //n2p_fifo.sv
+`include "perm_pkg.sv"
+`include "n2p_fifo.sv"
 
 module ps (NOCI.TI t, NOCI.FO f);
 	// Signal from and to TB
@@ -30,18 +30,25 @@ module ps (NOCI.TI t, NOCI.FO f);
 	assign f.noc_from_dev_ctl = s2p_1.noc_from_dev_ctl;
 	assign f.noc_from_dev_data = s2p_1.noc_from_dev_data;
 
-	logic [16:0] n2p_fifo_out;
+	logic [8:0] n2p_fifo_out;
 	logic n2p_fifo_en_w; // Write Enable for FIFO
 	logic n2p_fifo_en_r;
-	logic [16:0] n2ps_temp; 
+	logic read_en_r; // Rising edge of NOC to perm FIFO's READ enable
+	logic [8:0] n2ps_temp; 
 	logic [3:0] Alen;
 	logic [9:0] Dlen;
-	logic [7:0] cmd_Des; // Store the command DESTINATION
+	enum [1:0] {
+		NONE,
+		WR_CMD,
+		RD_CMD
+	} rcv_cmd; // Read/Write command
 	logic [9:0] cmd_cnt;
+	logic [9:0] cmd_cnt_fifo; 
+	logic [8:0] n2p_fifo_read_temp; // Temp for the first read from N2P FIFO
 
 	// FIFO receiving command from NOC
 	n2p_fifo n2p_fifo(.clk(t.clk), .rst(t.reset), .data_in(n2ps_temp), .rd_en(n2p_fifo_en_r), .wr_en(n2p_fifo_en_w), .data_out(n2p_fifo_out), .empty(n2p_fifo_empty), .full(n2p_fifo_full));
-	edge_det ctl_edge_r (.clk(t.clk), .rst(t.reset), .rising_or_falling(1'b1), .sig(t.noc_to_dev_ctl), .edge_detected(ctl_r));
+	edge_det n2pfifo_read_en_r (.clk(t.clk), .rst(t.reset), .rising_or_falling(1'b1), .sig(n2p_fifo_en_r), .edge_detected(read_en_r));
 	edge_det ctl_edge_f (.clk(t.clk), .rst(t.reset), .rising_or_falling(1'b0), .sig(t.noc_to_dev_ctl), .edge_detected(ctl_f));
 
 	// Write/Read command
@@ -49,15 +56,21 @@ module ps (NOCI.TI t, NOCI.FO f);
 		if (t.reset) begin
 			Alen <= #1 0;
 			Dlen <= #1 0;
-			cmd_Des <= #1 0;
+			rcv_cmd <= #1 NONE;
 			cmd_cnt <= #1 0;
 		end
 		else begin
 			if (ctl_f) begin
-				Alen <= #1 (1 << n2ps_temp[15:14]);
-				Dlen <= #1 (1 << n2ps_temp[13:11]);
-				cmd_Des <= #1 t.noc_to_dev_data;
-				cmd_cnt <= #1 (1<<n2ps_temp[15:14]) + (1<<n2ps_temp[13:11]) + 2;
+				Alen <= #1 (1 << n2ps_temp[7:6]);
+				Dlen <= #1 (1 << n2ps_temp[5:3]);
+				if (n2ps_temp[2:0] == 3'b010) begin // Write command
+					rcv_cmd <= #1 WR_CMD;
+					cmd_cnt <= #1 (1<<n2ps_temp[7:6]) + (1<<n2ps_temp[5:3]) + 2;
+				end
+				else if (n2ps_temp[2:0] == 3'b001) begin // Read command
+					rcv_cmd <= #1 RD_CMD;
+					cmd_cnt <= #1 (1<<n2ps_temp[7:6]) + 2;
+				end
 			end
 			else if (cmd_cnt)
 				cmd_cnt <= #1 cmd_cnt - 1;
@@ -69,20 +82,42 @@ module ps (NOCI.TI t, NOCI.FO f);
 		if (t.reset)
 			n2ps_temp <= #1 0;
 		else begin
-			n2ps_temp <= #1 {t.noc_to_dev_ctl, t.noc_to_dev_data, cmd_Des};
+			n2ps_temp <= #1 {t.noc_to_dev_ctl, t.noc_to_dev_data};
 		end
 	end
 
 	// Write Enable of FIFO
 	assign n2p_fifo_en_w = ctl_f || cmd_cnt;
-	// Read/PASS data from FIFO to perms
+	// Read Enalbe of FIFO
+	assign n2p_fifo_en_r = ~n2p_fifo_empty;
+	
+	// Cmd cnt for n2p fifo read
 	always_ff @ (posedge t.clk or posedge t.reset) begin
 		if (t.reset)
-			n2p_fifo_en_r <= #1 0;
-		else if (!n2p_fifo_empty) begin
-			n2p_fifo_en_r <= #1 1;
+			cmd_cnt_fifo <= #1 0;
+		else begin
+			if (ctl_f) begin
+				if (n2ps_temp[2:0] == 3'b010) begin // Write command
+					cmd_cnt_fifo <= #1 (1<<n2ps_temp[7:6]) + (1<<n2ps_temp[5:3]) + 4;
+				end
+				else if (n2ps_temp[2:0] == 3'b001) begin // Read command
+					cmd_cnt_fifo <= #1 (1<<n2ps_temp[7:6]) + 4;
+				end
+			end
+			else if (n2p_fifo_en_r && cmd_cnt_fifo)
+				cmd_cnt_fifo <= #1 cmd_cnt_fifo - 1;
+			else if (cmd_cnt_fifo == 1)
+				cmd_cnt_fifo <= #1 0;
+		end
+	end
+	always_ff @ (posedge t.clk or posedge t.reset) begin
+		if (t.reset)
+			n2p_fifo_read_temp <= #1 0;
+		else begin
+			if ((rcv_cmd==WR_CMD) && (cmd_cnt_fifo==(Alen+Dlen+3)))
+				n2p_fifo_read_temp <= #1 n2p_fifo_out;
+			else if ((rcv_cmd==RD_CMD) && (cmd_cnt_fifo==(Alen+3)))
+				n2p_fifo_read_temp <= #1 n2p_fifo_out;
 		end
 	end
 endmodule
-
-
