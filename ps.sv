@@ -3,6 +3,8 @@
 //`include "nochw2.sv"
 `include "perm_pkg.sv"
 `include "n2p_fifo.sv"
+`include "p2n_fifo.sv"
+`include "pri_rr_arb.sv"
 
 module ps (NOCI.TI t, NOCI.FO f);
 	// Signal from and to TB
@@ -24,12 +26,6 @@ module ps (NOCI.TI t, NOCI.FO f);
 	perm_pkg p3(s2p_3.TI, s2p_3.FO);
 	perm_pkg p4(s2p_4.TI, s2p_4.FO);
 	 
-	// Signal from and to perm intf 1
-	assign s2p_1.noc_to_dev_ctl = t.noc_to_dev_ctl;
-	assign s2p_1.noc_to_dev_data = t.noc_to_dev_data;
-	assign f.noc_from_dev_ctl = s2p_1.noc_from_dev_ctl;
-	assign f.noc_from_dev_data = s2p_1.noc_from_dev_data;
-
 	logic [8:0] n2p_fifo_out;
 	logic n2p_fifo_en_w; // Write Enable for FIFO
 	logic n2p_fifo_en_r;
@@ -42,14 +38,26 @@ module ps (NOCI.TI t, NOCI.FO f);
 		WR_CMD,
 		RD_CMD
 	} rcv_cmd; // Read/Write command
+	logic [7:0] cmd_Des; // Rd/Wr command DESTINATION
 	logic [9:0] cmd_cnt;
 	logic [9:0] cmd_cnt_fifo; 
-	logic [8:0] n2p_fifo_read_temp; // Temp for the first read from N2P FIFO
 
 	// FIFO receiving command from NOC
 	n2p_fifo n2p_fifo(.clk(t.clk), .rst(t.reset), .data_in(n2ps_temp), .rd_en(n2p_fifo_en_r), .wr_en(n2p_fifo_en_w), .data_out(n2p_fifo_out), .empty(n2p_fifo_empty), .full(n2p_fifo_full));
 	edge_det n2pfifo_read_en_r (.clk(t.clk), .rst(t.reset), .rising_or_falling(1'b1), .sig(n2p_fifo_en_r), .edge_detected(read_en_r));
 	edge_det ctl_edge_f (.clk(t.clk), .rst(t.reset), .rising_or_falling(1'b0), .sig(t.noc_to_dev_ctl), .edge_detected(ctl_f));
+
+	// Signal from and to perm intf 1
+	assign s2p_1.noc_to_dev_ctl = (cmd_Des==8'h40) ? n2p_fifo_out[8] : 1;
+	assign s2p_1.noc_to_dev_data = (cmd_Des==8'h40) ? n2p_fifo_out[7:0] : 0;
+	assign s2p_2.noc_to_dev_ctl = (cmd_Des==8'h41) ? n2p_fifo_out[8] : 1;
+	assign s2p_2.noc_to_dev_data = (cmd_Des==8'h41) ? n2p_fifo_out[7:0] : 0;
+	assign s2p_3.noc_to_dev_ctl = (cmd_Des==8'h42) ? n2p_fifo_out[8] : 1;
+	assign s2p_3.noc_to_dev_data = (cmd_Des==8'h42) ? n2p_fifo_out[7:0] : 0;
+	assign s2p_4.noc_to_dev_ctl = (cmd_Des==8'h43) ? n2p_fifo_out[8] : 1;
+	assign s2p_4.noc_to_dev_data = (cmd_Des==8'h43) ? n2p_fifo_out[7:0] : 0;
+//	assign f.noc_from_dev_ctl = s2p_1.noc_from_dev_ctl;
+//	assign f.noc_from_dev_data = s2p_1.noc_from_dev_data;
 
 	// Write/Read command
 	always_ff @ (posedge t.clk or posedge t.reset) begin
@@ -57,12 +65,14 @@ module ps (NOCI.TI t, NOCI.FO f);
 			Alen <= #1 0;
 			Dlen <= #1 0;
 			rcv_cmd <= #1 NONE;
+			cmd_Des <= #1 0;
 			cmd_cnt <= #1 0;
 		end
 		else begin
 			if (ctl_f) begin
 				Alen <= #1 (1 << n2ps_temp[7:6]);
 				Dlen <= #1 (1 << n2ps_temp[5:3]);
+				cmd_Des <= #1 t.noc_to_dev_data;
 				if (n2ps_temp[2:0] == 3'b010) begin // Write command
 					rcv_cmd <= #1 WR_CMD;
 					cmd_cnt <= #1 (1<<n2ps_temp[7:6]) + (1<<n2ps_temp[5:3]) + 2;
@@ -89,7 +99,7 @@ module ps (NOCI.TI t, NOCI.FO f);
 	// Write Enable of FIFO
 	assign n2p_fifo_en_w = ctl_f || cmd_cnt;
 	// Read Enalbe of FIFO
-	assign n2p_fifo_en_r = ~n2p_fifo_empty;
+	assign n2p_fifo_en_r = (~n2p_fifo_empty) && (cmd_Des);
 	
 	// Cmd cnt for n2p fifo read
 	always_ff @ (posedge t.clk or posedge t.reset) begin
@@ -110,14 +120,118 @@ module ps (NOCI.TI t, NOCI.FO f);
 				cmd_cnt_fifo <= #1 0;
 		end
 	end
-	always_ff @ (posedge t.clk or posedge t.reset) begin
-		if (t.reset)
-			n2p_fifo_read_temp <= #1 0;
+
+	///////////////////////////////////////
+	logic p2n_fifo1_en_r, p2n_fifo2_en_r, p2n_fifo3_en_r, p2n_fifo4_en_r;
+	logic p2n_fifo1_en_w, p2n_fifo2_en_w, p2n_fifo3_en_w, p2n_fifo4_en_w;
+	logic p2n_fifo1_empty, p2n_fifo2_empty, p2n_fifo3_empty, p2n_fifo4_empty;
+	logic p2n_fifo1_full, p2n_fifo2_full, p2n_fifo3_full, p2n_fifo4_full;
+	logic [8:0] p2n_fifo1_out, p2n_fifo2_out, p2n_fifo3_out, p2n_fifo4_out;
+	logic [8:0] p2n_fifo1_in, p2n_fifo2_in, p2n_fifo3_in, p2n_fifo4_in;
+	logic [3:0] pfifo_req; // Request list
+	logic [3:0] pfifo_grt; // Grant list
+	logic [7:0] p2n_cnt; // Command counter for p2n FIFO
+	assign p2n_fifo1_in = {s2p_1.noc_from_dev_ctl, s2p_1.noc_from_dev_data};
+	assign p2n_fifo2_in = {s2p_2.noc_from_dev_ctl, s2p_2.noc_from_dev_data};
+	assign p2n_fifo3_in = {s2p_3.noc_from_dev_ctl, s2p_3.noc_from_dev_data};
+	assign p2n_fifo4_in = {s2p_4.noc_from_dev_ctl, s2p_4.noc_from_dev_data};
+	p2n_fifo p2n_fifo1 (.clk(t.clk), .rst(t.reset), .data_in(p2n_fifo1_in), .rd_en(p2n_fifo1_en_r), .wr_en(p2n_fifo1_en_w), .data_out(p2n_fifo1_out), .empty(p2n_fifo1_empty), .full(p2n_fifo1_full));
+	p2n_fifo p2n_fifo2 (.clk(t.clk), .rst(t.reset), .data_in(p2n_fifo2_in), .rd_en(p2n_fifo2_en_r), .wr_en(p2n_fifo2_en_w), .data_out(p2n_fifo2_out), .empty(p2n_fifo2_empty), .full(p2n_fifo2_full));
+	p2n_fifo p2n_fifo3 (.clk(t.clk), .rst(t.reset), .data_in(p2n_fifo3_in), .rd_en(p2n_fifo3_en_r), .wr_en(p2n_fifo3_en_w), .data_out(p2n_fifo3_out), .empty(p2n_fifo3_empty), .full(p2n_fifo3_full));
+	p2n_fifo p2n_fifo4 (.clk(t.clk), .rst(t.reset), .data_in(p2n_fifo4_in), .rd_en(p2n_fifo4_en_r), .wr_en(p2n_fifo4_en_w), .data_out(p2n_fifo4_out), .empty(p2n_fifo4_empty), .full(p2n_fifo4_full));
+	// Arbitrator for input from 4 perm devices
+	arb arb(.clk(t.clk), .reset(t.reset), .req(pfifo_req), .grant(pfifo_grt));
+
+	assign p2n_fifo1_en_r = pfifo_grt[0] && (!p2n_fifo1_empty);
+	assign p2n_fifo2_en_r = pfifo_grt[1] && (!p2n_fifo2_empty);
+	assign p2n_fifo3_en_r = pfifo_grt[2] && (!p2n_fifo3_empty);
+	assign p2n_fifo4_en_r = pfifo_grt[3] && (!p2n_fifo4_empty);
+/*	always_ff @ (posedge t.clk or posedge t.reset) begin
+		if (t.reset) begin
+			p2n_fifo1_en_r <= #1 0;
+		end
 		else begin
-			if ((rcv_cmd==WR_CMD) && (cmd_cnt_fifo==(Alen+Dlen+3)))
-				n2p_fifo_read_temp <= #1 n2p_fifo_out;
-			else if ((rcv_cmd==RD_CMD) && (cmd_cnt_fifo==(Alen+3)))
-				n2p_fifo_read_temp <= #1 n2p_fifo_out;
+			if (s2p_1.noc_from_dev_ctl!=1 && s2p_1.noc_from_dev_data!=0)
+				p2n_fifo1_en_r <= #1 1;
+			else
+				p2n_fifo1_en_r <= #1 0;
+		end
+	end
+*/
+	always_comb begin
+		case (pfifo_grt)
+			4'b0001: begin
+				f.noc_from_dev_ctl = p2n_fifo1_out[8];
+				f.noc_from_dev_data = p2n_fifo1_out[7:0];
+			end
+			4'b0010: begin
+				f.noc_from_dev_ctl = p2n_fifo2_out[8];
+				f.noc_from_dev_data = p2n_fifo2_out[7:0];
+			end
+			4'b0100: begin
+				f.noc_from_dev_ctl = p2n_fifo3_out[8];
+				f.noc_from_dev_data = p2n_fifo3_out[7:0];
+			end
+			4'b1000: begin
+				f.noc_from_dev_ctl = p2n_fifo4_out[8];
+				f.noc_from_dev_data = p2n_fifo4_out[7:0];
+			end
+			default: begin
+				f.noc_from_dev_ctl = 1;
+				f.noc_from_dev_data = 0;
+			end
+		endcase
+	end
+
+	assign p2n_fifo1_en_w = (s2p_1.noc_from_dev_ctl&&(s2p_1.noc_from_dev_data!=0)) || (~s2p_1.noc_from_dev_ctl);
+	assign p2n_fifo2_en_w = (s2p_2.noc_from_dev_ctl&&(s2p_2.noc_from_dev_data!=0)) || (~s2p_2.noc_from_dev_ctl);
+	assign p2n_fifo3_en_w = (s2p_3.noc_from_dev_ctl&&(s2p_3.noc_from_dev_data!=0)) || (~s2p_3.noc_from_dev_ctl);
+	assign p2n_fifo4_en_w = (s2p_4.noc_from_dev_ctl&&(s2p_4.noc_from_dev_data!=0)) || (~s2p_4.noc_from_dev_ctl);
+
+	always_ff @ (posedge t.clk or posedge t.reset) begin
+		if (t.reset) begin
+			pfifo_req <= #1 0;
+			p2n_cnt <= #1 0;
+		end
+		else begin
+			if (s2p_1.noc_from_dev_ctl && (s2p_1.noc_from_dev_data!=0)) begin
+				pfifo_req[0] <= #1 1;
+				case (s2p_1.noc_from_dev_data[2:0])
+//					3'b011:
+					3'b100: p2n_cnt <= #1 5;
+					3'b101: p2n_cnt <= #1 6;
+				endcase
+			end
+			if (s2p_2.noc_from_dev_ctl && (s2p_2.noc_from_dev_data!=0)) begin
+				pfifo_req[1] <= #1 1;
+				case (s2p_2.noc_from_dev_data[2:0])
+//					3'b011:
+					3'b100: p2n_cnt <= #1 5;
+					3'b101: p2n_cnt <= #1 6;
+				endcase
+			end
+			if (s2p_3.noc_from_dev_ctl && (s2p_3.noc_from_dev_data!=0)) begin
+				pfifo_req[2] <= #1 1;
+				case (s2p_3.noc_from_dev_data[2:0])
+//					3'b011:
+					3'b100: p2n_cnt <= #1 5;
+					3'b101: p2n_cnt <= #1 6;
+				endcase
+			end
+			if (s2p_4.noc_from_dev_ctl && (s2p_4.noc_from_dev_data!=0)) begin
+				pfifo_req[3] <= #1 1;
+				case (s2p_4.noc_from_dev_data[2:0])
+//					3'b011:
+					3'b100: p2n_cnt <= #1 5;
+					3'b101: p2n_cnt <= #1 6;
+				endcase
+			end
+			if (p2n_cnt > 1)
+				p2n_cnt <= #1 p2n_cnt - 1;
+			else if (p2n_cnt == 1) begin
+				p2n_cnt <= #1 0;
+				pfifo_req <= #1 0;
+			end
 		end
 	end
 endmodule
